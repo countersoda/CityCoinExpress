@@ -15,8 +15,6 @@ import {
 } from "./constants.js";
 import { MongoClient } from "mongodb";
 
-var state = { data: [], totalMiners: 0 };
-
 async function getBlockHeight() {
   try {
     const result = await fetch(BASE_URL + "/extended/v1/block", {
@@ -64,7 +62,7 @@ async function getMiningStatsAtBlock(height = 0) {
     const data = result.value.data;
     result = {
       block: height,
-      minersCount: data.minersCount.value,
+      minersCount: Number(data.minersCount.value),
       amount: normalizeSTX(data.amount.value),
     };
 
@@ -93,31 +91,48 @@ async function getMinerAtBlock(height = 0, id = 1) {
   }
 }
 
+async function getAllMinersAtBlock(height, amountAtBlock) {
+  const totalMiner = await getAmountOfMiners();
+  let minersAtBlock = [];
+  let winningAmount = 0;
+  for (let id = 1; id < totalMiner; id++) {
+    const miner = await getMinerAtBlock(height, id);
+    if (miner.type !== 9) {
+      const data = miner.value.data;
+      const isWinner = data.winner.type === 3;
+      const minerData = {
+        id,
+        spendSTX: normalizeSTX(data.ustx.value),
+        winner: isWinner,
+      };
+      if (isWinner) winningAmount = minerData.spendSTX;
+      minersAtBlock.push(minerData);
+    }
+    if (minersAtBlock.length === amountAtBlock) break;
+  }
+  const sum = (total, current) => total + current.spendSTX;
+  let avgSTX = minersAtBlock.reduce(sum, 0) / amountAtBlock;
+  return { miner: minersAtBlock, winningAmount, avgSTX };
+}
+
 async function getData() {
   let totalHeight = await getBlockHeight();
-  const totalMiner = await getAmountOfMiners();
   for (let height = START_HEIGHT; height < totalHeight; height++) {
-    let miningStats = await getMiningStatsAtBlock(height);
-    let minersAtBlock = [];
-    for (let id = 1; id < totalMiner; id++) {
-      const miner = await getMinerAtBlock(START_HEIGHT, id);
-      if (miner.type !== 9) {
-        let data = miner.value.data;
-        minerData = {
-          id,
-          spendSTX: data.ustx,
-          winner: data.winner,
-        };
-        minersAtBlock.push(minerData);
-      }
-      if (minersAtBlock.length === miningStats.minersCount) break;
-    }
+    const miningStats = await getMiningStatsAtBlock(height);
+    const amount = miningStats.minersCount;
+    const { miner, winningAmount, avgSTX } = await getAllMinersAtBlock(
+      height,
+      amount
+    );
     const entry = {
       _id: height,
-      totalMiner: miningStats.minersCount,
-      miner: minersAtBlock,
+      amount,
+      miner,
+      avgSTX,
+      winningAmount,
     };
-    
+    console.log(entry);
+    await db.insertOne(entry);
   }
 }
 
@@ -128,7 +143,7 @@ function normalizeSTX(microStx) {
 async function loadDB() {
   const client = await MongoClient.connect(MONGODB_URL);
   const collection = client.db("local").collection("stacks-blockchain");
-  return collection;
+  db = collection;
 }
 
 // fetchBlockData().then(console.log);
@@ -141,3 +156,7 @@ async function loadDB() {
 // const stacks = await loadDB();
 
 // const result = await stacks.findOne({ _id: 40522 });
+var db = null;
+await loadDB();
+db.drop();
+await getData();
