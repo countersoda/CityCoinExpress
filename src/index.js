@@ -1,8 +1,6 @@
 import fetch from "node-fetch";
-import * as fs from "fs";
 import { callReadOnlyFunction, uintCV } from "@stacks/transactions";
 import {
-  FILE_PATH,
   BASE_URL,
   NETWORK,
   senderAddress,
@@ -11,7 +9,11 @@ import {
   NYCC_CORE,
   NYCC_ADDRESS,
   START_HEIGHT,
+  MONGODB_URL,
+  GET_REGISTERED_USERS_NONCE,
+  GET_MINER_AT_BLOCK,
 } from "./constants.js";
+import { MongoClient } from "mongodb";
 
 var state = { data: [], totalMiners: 0 };
 
@@ -28,14 +30,32 @@ async function getBlockHeight() {
   }
 }
 
-async function call(height = 0, action, args) {
+async function getAmountOfMiners() {
   try {
-    console.log(action, args);
     const options = {
       contractAddress: NYCC_ADDRESS,
       contractName: NYCC_CORE,
-      functionName: action,
-      functionArgs: args,
+      functionName: GET_REGISTERED_USERS_NONCE,
+      functionArgs: [],
+      network: NETWORK,
+      senderAddress,
+    };
+    let result = await callReadOnlyFunction(options);
+    const data = result.value;
+    return Number(data);
+  } catch (error) {
+    console.log(error);
+  }
+}
+
+async function getMiningStatsAtBlock(height = 0) {
+  try {
+    height = uintCV(height);
+    const options = {
+      contractAddress: NYCC_ADDRESS,
+      contractName: NYCC_CORE,
+      functionName: GET_MINING_STATS_AT_BLOCK,
+      functionArgs: [height],
       network: NETWORK,
       senderAddress,
     };
@@ -54,33 +74,70 @@ async function call(height = 0, action, args) {
   }
 }
 
-async function getData() {
-  let height = await getBlockHeight();
-  for (let i = START_HEIGHT; i < height; i++) {
-    let height = uintCV(i);
-    let value = await call(height, GET_MINING_STATS_AT_BLOCK, [height]);
-    state.data.push(value);
+async function getMinerAtBlock(height = 0, id = 1) {
+  try {
+    height = uintCV(height);
+    id = uintCV(id);
+    const options = {
+      contractAddress: NYCC_ADDRESS,
+      contractName: NYCC_CORE,
+      functionName: GET_MINER_AT_BLOCK,
+      functionArgs: [height, id],
+      network: NETWORK,
+      senderAddress,
+    };
+    let result = await callReadOnlyFunction(options);
+    return result;
+  } catch (error) {
+    console.log(error);
   }
-  fs.appendFileSync(
-    FILE_PATH,
-    JSON.stringify(state, (_, v) => (typeof v === "bigint" ? v.toString() : v))
-  );
+}
+
+async function getData() {
+  let totalHeight = await getBlockHeight();
+  const totalMiner = await getAmountOfMiners();
+  for (let height = START_HEIGHT; height < totalHeight; height++) {
+    let miningStats = await getMiningStatsAtBlock(height);
+    let minersAtBlock = [];
+    for (let id = 1; id < totalMiner; id++) {
+      const miner = await getMinerAtBlock(START_HEIGHT, id);
+      if (miner.type !== 9) {
+        let data = miner.value.data;
+        minerData = {
+          id,
+          spendSTX: data.ustx,
+          winner: data.winner,
+        };
+        minersAtBlock.push(minerData);
+      }
+      if (minersAtBlock.length === miningStats.minersCount) break;
+    }
+    const entry = {
+      _id: height,
+      totalMiner: miningStats.minersCount,
+      miner: minersAtBlock,
+    };
+    
+  }
 }
 
 function normalizeSTX(microStx) {
   return Number(microStx) / Math.pow(10, DECIMALS);
 }
 
-async function loadState() {
-  let rawData = fs.readFileSync(FILE_PATH, "utf8");
-  const data = JSON.parse(rawData);
-  state = data;
+async function loadDB() {
+  const client = await MongoClient.connect(MONGODB_URL);
+  const collection = client.db("local").collection("stacks-blockchain");
+  return collection;
 }
 
 // fetchBlockData().then(console.log);
 // await getData();
 // await loadState();
-let height = uintCV(40522);
-call(Number(height.value), GET_MINING_STATS_AT_BLOCK, [height]).then(
-  console.log
-);
+// let height = uintCV(40522);
+// call(Number(height.value), GET_MINING_STATS_AT_BLOCK, [height]).then(
+//   console.log
+// );
+// const stacks = await loadDB();
+
+// const result = await stacks.findOne({ _id: 40522 });
