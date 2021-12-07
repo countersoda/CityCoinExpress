@@ -60,13 +60,10 @@ async function getMiningStatsAtBlock(height = 0) {
     let result = await callReadOnlyFunction(options);
     if (result.type === 9) return;
     const data = result.value.data;
-    result = {
-      block: height,
+    return {
       minersCount: Number(data.minersCount.value),
       amount: normalizeSTX(data.amount.value),
     };
-
-    return result;
   } catch (error) {
     console.log(error);
   }
@@ -118,18 +115,18 @@ async function getAllMinersAtBlock(height, amountAtBlock) {
 async function getData() {
   let totalHeight = await getBlockHeight();
   for (let height = START_HEIGHT; height < totalHeight; height++) {
-    const miningStats = await getMiningStatsAtBlock(height);
-    const amount = miningStats.minersCount;
+    const { amount, minersCount } = await getMiningStatsAtBlock(height);
     const { miner, winningAmount, avgSTX } = await getAllMinersAtBlock(
       height,
-      amount
+      minersCount
     );
     const entry = {
       _id: height,
-      amount,
-      miner,
+      amount_miner: minersCount,
+      totalSTX: amount,
       avgSTX,
       winningAmount,
+      miner,
     };
     console.log(entry);
     await db.insertOne(entry);
@@ -146,17 +143,6 @@ async function loadDB() {
   db = collection;
 }
 
-// fetchBlockData().then(console.log);
-// await getData();
-// await loadState();
-// let height = uintCV(40522);
-// call(Number(height.value), GET_MINING_STATS_AT_BLOCK, [height]).then(
-//   console.log
-// );
-// const stacks = await loadDB();
-
-// const result = await stacks.findOne({ _id: 40522 });
 var db = null;
 await loadDB();
-db.drop();
 await getData();
